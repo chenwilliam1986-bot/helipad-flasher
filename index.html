@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>停机坪 烧录和装曲柄</title>
+<script type="module" src="https://unpkg.com/esp-web-tools@10.1.1/dist/web/install-button.js?module"></script>
+<style>
+  body { background: #16181d; color: #e4e6eb; font: 17px/1.75 "Microsoft YaHei", "PingFang SC", sans-serif; margin: 0; padding: 24px 16px 60px; }
+  main { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 28px; margin: 0 0 4px; }
+  h2 { font-size: 21px; margin: 36px 0 10px; padding-top: 18px; border-top: 1px solid #343944; }
+  .sub { color: #9aa1ad; margin: 0 0 20px; }
+  .n { display: inline-block; width: 30px; height: 30px; line-height: 30px; text-align: center; border-radius: 50%; background: #e0464f; color: #fff; font-weight: bold; margin-right: 8px; }
+  img { width: 100%; border-radius: 8px; border: 1px solid #343944; margin: 8px 0; }
+  .note { background: #22262e; border-left: 4px solid #f0a94a; padding: 10px 14px; border-radius: 4px; margin: 12px 0; }
+  .flash { background: #22262e; border-radius: 8px; padding: 18px; margin: 14px 0; text-align: center; }
+  .flash button { background: #e0464f; color: #fff; border: 0; border-radius: 8px; font: bold 20px "Microsoft YaHei", sans-serif; padding: 14px 44px; cursor: pointer; }
+  .flash .warn { color: #f0a94a; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+  td, th { border: 1px solid #343944; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #22262e; }
+  b { color: #fff; }
+  a { color: #7fb4ff; word-break: break-all; }
+  @media print { * { -webkit-print-color-adjust: exact; print-color-adjust: exact; } h2, img, table { break-inside: avoid; } }
+  @page { margin: 0; }
+</style>
+</head>
+<body>
+<main>
+<h1>停机坪：烧录和装曲柄</h1>
+<p class="sub">一共三步：网页烧录 → 插电装曲柄和右眼 → 按一下。不用装软件，不用调试，不用连 WiFi。非 ASUS / ROG 官方产品。</p>
+
+<h2><span class="n">1</span>烧录</h2>
+<p>曲柄、右眼、长刃、摇杆都<b>先不要装</b>。用电脑上的 <b>Chrome 或 Edge</b> 打开本页：<br>
+<a href="https://chenwilliam1986-bot.github.io/helipad-flasher/">https://chenwilliam1986-bot.github.io/helipad-flasher/</a></p>
+<p>用 USB 数据线把主控板（ESP32-C3 SuperMini）接到电脑，只接主控板，充电头先不插。点下面的按钮，在弹出的列表里选带 “USB JTAG” 或 “COM” 字样的那一项，点“连接”，再点“安装”，等一两分钟。</p>
+<div class="flash">
+  <esp-web-install-button manifest="manifest.json">
+    <button slot="activate">烧录固件</button>
+    <span slot="unsupported" class="warn">这个浏览器不支持，请换电脑上的 Chrome 或 Edge。</span>
+    <span slot="not-allowed" class="warn">要用 https 打开本页才能烧录。</span>
+  </esp-web-install-button>
+</div>
+<p>看到安装完成就拔掉数据线。插着电脑时舵机不会动，小蓝灯两下两下地闪，是正常的。</p>
+<div class="note">如果安装时问要不要“擦除设备”（Erase device）：第一次烧选不选都行。<b>零件已经装好以后重烧，不要勾</b>，否则会回到第 2 步的装配流程。</div>
+
+<h2><span class="n">2</span>插充电头，装右眼和曲柄</h2>
+<p>插上 5V 3A 充电头。两只舵机各转一下，停住不动，<b>小蓝灯快闪</b>。这时舵机在使劲保持角度，趁它停着把零件压上去：</p>
+<p><b>先装右眼</b>：银色那块最长的直边（图里绿线）摆成<b>竖直</b>，压上右舵机的轴，拧上中心螺丝。</p>
+<img src="eye.png" alt="右眼：最长的直边竖直">
+<p><b>再装曲柄</b>：只拿曲柄一个件，“轴孔 → P 孔”这条臂（图里红线）<b>竖直朝上</b>，压上左舵机的轴，拧上中心螺丝。</p>
+<img src="crank.png" alt="曲柄：臂竖直朝上">
+<div class="note">两张图都是从前面看（正对舵机的轴）。差一点点没关系，摆到最接近竖直的那一齿就行。图里右边的小字是设计时的记录，不用看。</div>
+
+<h2><span class="n">3</span>按一下翘板，装完</h2>
+<p>按一下翘板（或者小板上的 BOOT 键）。两只舵机转回中间位置、松劲，<b>灯带亮起来</b>，就装完了。</p>
+<p>接着把长刃和摇杆装上（P、Q 两颗螺丝），再装后舱。以后不会再进这个装配流程。</p>
+
+<h2>平时怎么用</h2>
+<table>
+<tr><th>你做什么</th><th>它做什么</th></tr>
+<tr><td>放上鼠标</td><td>约 1 秒后灯灭、收拢</td></tr>
+<tr><td>拿起鼠标</td><td>立起、亮灯</td></tr>
+<tr><td>立起时短按一下翘板</td><td>开 / 关灯</td></tr>
+<tr><td>立起时连按两下翘板</td><td>换一种灯效（共 6 种，会记住）</td></tr>
+</table>
+
+<h2>出了状况</h2>
+<table>
+<tr><th>情况</th><th>怎么办</th></tr>
+<tr><td>点按钮后列表里没有设备，或者连不上</td><td>拔线 → 按住小板上的 BOOT 键 → 插线 → 松开，再点一次按钮。还不行就换数据线（有的线只能充电）</td></tr>
+<tr><td>舵机在动时要碰到东西、嗡嗡响</td><td>按 BOOT 键，两只立刻松劲。重新插电恢复</td></tr>
+<tr><td>零件装歪了，想重装</td><td>按住 BOOT 键 5 秒到小蓝灯快闪 → 拔电 → <b>把曲柄和右眼拆下来</b> → 重新插电，从第 2 步再来</td></tr>
+</table>
+
+<h2>说明</h2>
+<p>这是个人原型的固件，参数按作者的一台样机写死（长刃立起角、灯带 14 / 20 / 118 颗）。动作和灯效的程序在样机上跑过；这个一键版还没在第二台机器上验证。源码：<a href="https://github.com/chenwilliam1986-bot/helipad-flasher">github.com/chenwilliam1986-bot/helipad-flasher</a></p>
+</main>
+</body>
+</html>
