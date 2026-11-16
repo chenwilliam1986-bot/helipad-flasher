@@ -1,6 +1,6 @@
 {
   "name": "停机坪",
-  "version": "09",
+  "version": "10",
   "new_install_prompt_erase": false,
   "builds": [
     {

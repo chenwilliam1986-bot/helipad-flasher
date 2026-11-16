@@ -1,13 +1,20 @@
-// 09 发布版：给别人用的一个固件，不带 WiFi，不用调试。
+// 10 发布版（2026-11-16）：= 09 + 记住舵机停在哪。给别人用的一个固件，不带 WiFi，不用调试。
+// 跟 09 的差别只在“动作没走完”这件事上：
+//   - 舵机每次动都把最后发出去的位置存进板子（动的时候约 0.06 秒存一次），上电按存着的位置当起点，不再按“上次走完的姿态”猜。
+//   - 动作没走完（按了 BOOT 急停，或者半路断电）：不自己动，小蓝灯慢闪。检查完按一下 BOOT（或短按一下翘板），
+//     两只从停下的地方用一半速度退回上一次走完的姿态。拔不拔电都一样。
+//   - 装完回中位后断过电，第一次收拢也从中位起步（09 会当成在立起位）。
+// 新加的这部分没在实物上跑过，见 说明.md。
 // 第一次上电：两只舵机转到装配角停住，小灯快闪 → 把右眼、曲柄竖直装上，拧好 → 按一下翘板 → 结束。
 //   按完后两只回中位、不出力、亮灯；在中位装长刃和摇杆。之后就是正常使用：放上鼠标收拢灭灯，拿起鼠标立起亮灯。
 // 正常使用的逻辑、灯效跟 08_main 一样（整体电路方案-v04 §9），两头位置用样机上调好的数（长刃立起 +9°）。
-// 说明见同文件夹 说明.md；给别人的烧录包在 helipad/电路/烧录包/。
+// 说明见同文件夹 说明.md；给别人的烧录包在 helipad/电路/烧录包/，网页烧录在 helipad/电路/网页烧录/。
 //
 // 接线（v04 §2）：GPIO3 长刃舵机、GPIO4 右眼舵机、GPIO0 重力微动（NO 接 GPIO0、C 接 G）、
 //   GPIO6 左臂灯带、GPIO7 右眼灯带、GPIO10 底座灯带。
-// 急停：舵机在动时按板上 BOOT 键 → 两只立刻不出力（只停控制信号，不断电）。先拔电检查机构，不要直接重新插电：
-//   停在半路时没有记下位置，重新上电后仍按上次走完的姿态当起点，第一次动作可能突然跳一下（看代码得出，实机没复现；恢复步骤待测）。
+// 急停：舵机在动时按板上 BOOT 键 → 两只立刻不出力（只停控制信号，不断电），小蓝灯慢闪。
+//   检查机构（可以拔电）→ 按一下 BOOT 或短按一下翘板 → 慢慢退回上一次走完的姿态。
+//   舵机没有位置反馈：停下以后零件被手掰过、或者自己滑过，起步那一下还是会跳，跳多少 = 挪了多少。
 // 重新装零件：平时按住 BOOT 键 5 秒 → 小灯快闪、清掉“已装好”。拆下曲柄和右眼后重新插电，回到第一次上电的流程。
 // 插着电脑时不动舵机（整机别从电脑口取电），串口发 g 才继续。
 //
@@ -51,6 +58,8 @@ const uint32_t CLICK_MAX_MS = 400;
 const uint32_t CLICK_GAP_MS = 500;
 const uint32_t AFTER_MOVE_MS = 500;
 const uint32_t REDO_HOLD_MS = 5000;            // BOOT 按住 5 秒 = 重新装零件
+const uint32_t POS_SAVE_MS = 60;               // 舵机在动时每隔这么久存一次位置（右眼最快约 80°/秒，60 ms 约 5°）
+const int RECOVER_SLOW = 2;                    // 没走完之后退回去：用时乘这个数
 
 // ---------- 存在板子里的 ----------
 Preferences prefs;
@@ -59,18 +68,44 @@ bool poseOpen = false;     // 上次停在立起(true) / 收拢(false)
 bool lightOn = true;
 int fx = 5;                // 灯效，默认贯穿流星
 const int BRI = 120;       // 亮度 0–255
+bool midMove = false;      // 有一次动作没走完（急停或半路断电）
+bool posKnown = false;     // 板子里存着舵机位置（09 升上来的第一次没有）
+int curUs[2] = {1500, 1500};   // 两只舵机最后发出去的脉宽
 
+// 闪存命名空间沿用 rel09：从 09 重烧上来不用重新装零件。10 新增 pos、mv 两项。
 void loadPrefs() {
   prefs.begin("rel09", true);
   assembled = prefs.getBool("asm", false);
   poseOpen = prefs.getBool("pose", false);
   lightOn = prefs.getBool("light", true);
   fx = constrain(prefs.getInt("fx", 5), 0, NFX - 1);
+  midMove = prefs.getBool("mv", false);
+  uint32_t p = prefs.getUInt("pos", 0);
+  prefs.end();
+  int u0 = p >> 16, u1 = p & 0xFFFF;
+  posKnown = u0 >= 500 && u0 <= 2500 && u1 >= 500 && u1 <= 2500;
+  if (posKnown) { curUs[0] = u0; curUs[1] = u1; }
+}
+// 只存位置和“没走完”标记（动的时候反复调用；值没变时闪存不会重写）
+void savePos() {
+  prefs.begin("rel09", false);
+  prefs.putUInt("pos", ((uint32_t)curUs[0] << 16) | (uint32_t)curUs[1]);
+  prefs.putBool("mv", midMove);
   prefs.end();
 }
+// 一次动作走完后调用：连同姿态一起存，清掉“没走完”
 void savePrefs() {
+  midMove = false;
   prefs.begin("rel09", false);
   prefs.putBool("asm", assembled); prefs.putBool("pose", poseOpen);
+  prefs.putBool("light", lightOn); prefs.putInt("fx", fx);
+  prefs.putUInt("pos", ((uint32_t)curUs[0] << 16) | (uint32_t)curUs[1]);
+  prefs.putBool("mv", false);
+  prefs.end();
+}
+// 只改灯的设置时用：不碰位置和“没走完”
+void saveLight() {
+  prefs.begin("rel09", false);
   prefs.putBool("light", lightOn); prefs.putInt("fx", fx);
   prefs.end();
 }
@@ -179,7 +214,6 @@ void ledTick() {
 }
 
 // ================= 舵机 =================
-int curUs[2] = {US_CENTER, US_CENTER};
 uint32_t tMoveEnd = 0;
 bool estop = false;
 
@@ -194,39 +228,45 @@ void servoWrite(int k, int us) {
 void servoOff(int k) { ledcWrite(SPIN[k], 0); }
 float ease(float x) { if (x <= 0) return 0; if (x >= 1) return 1; return 0.5f - 0.5f * cosf(PI * x); }
 
-// 两只各走到目标；first 先动，另一只在 first 走到一半时起步。走完两只不出力。
-// 返回 false = 中途按了 BOOT 急停。
-bool moveTwo(int tgt0, int tgt1, int first) {
+// 两只各走到目标；first 先动，另一只在 first 走到一半时起步。走完两只不出力。slow：用时乘几倍。
+// 起步前在板子里记“没走完”，动的时候约 0.06 秒存一次位置；走完由调用的地方 savePrefs() 清掉。
+// 返回 false = 中途按了 BOOT 急停（位置已存）。
+bool moveTwo(int tgt0, int tgt1, int first, int slow = 1) {
   int from[2] = {curUs[0], curUs[1]};
   int tgt[2] = {tgt0, tgt1};
   uint32_t dur[2], off[2];
   for (int k = 0; k < 2; k++) {
     int span = max(abs(standUs(k) - foldUs(k)), 1);
-    dur[k] = max((uint32_t)((uint64_t)MOVE_MS * abs(tgt[k] - from[k]) / span), (uint32_t)300);
+    dur[k] = max((uint32_t)((uint64_t)MOVE_MS * slow * abs(tgt[k] - from[k]) / span), (uint32_t)300);
   }
   off[first] = 0;
   off[1 - first] = (uint32_t)(STAGGER * dur[first]);
   moving = true;
   ledBlack();                                     // 动之前灯先全灭
   digitalWrite(PIN_BLED, LOW);
+  midMove = true;
+  savePos();                                      // 先记下“没走完”，再给舵机信号
   bool ok = true;
-  uint32_t t = 0, tEnd = max(off[0] + dur[0], off[1] + dur[1]);
+  uint32_t tEnd = max(off[0] + dur[0], off[1] + dur[1]);
+  uint32_t t0 = millis(), tSave = t0;
   while (true) {
+    uint32_t t = millis() - t0;
     for (int k = 0; k < 2; k++) {
       float x = (t < off[k]) ? 0 : (float)(t - off[k]) / dur[k];
       servoWrite(k, from[k] + (int)((tgt[k] - from[k]) * ease(x)));
     }
     if (t >= tEnd) break;
     if (digitalRead(PIN_BOOT) == LOW) { ok = false; break; }
+    if (millis() - tSave >= POS_SAVE_MS) { tSave = millis(); savePos(); }
     delay(20);
-    t += 20;
   }
   if (ok) delay(150);
   servoOff(0); servoOff(1);
+  savePos();                                      // 停在哪存哪（走完时 = 目标）
   digitalWrite(PIN_BLED, HIGH);
   moving = false;
   tMoveEnd = millis();
-  if (!ok) { estop = true; Serial.println("急停：两只不出力。重新插电恢复。"); }
+  if (!ok) { estop = true; Serial.println("急停：两只不出力，位置已记下。检查机构后按一下 BOOT（或短按翘板），慢慢退回上一个姿态。"); }
   return ok;
 }
 // 立起：右眼先动、长刃后动；收拢：长刃先动、右眼后动
@@ -270,7 +310,7 @@ void clickTick() {
   clicks = 0;
   ledsBlack = true;
   if (!lightOn) ledBlack();
-  savePrefs();
+  saveLight();
 }
 
 // ================= 第一次上电：装曲柄和右眼 =================
@@ -279,6 +319,7 @@ void assemble() {
   Serial.println("第一次上电：两只舵机停在装配角。右眼长直边竖直压上，曲柄臂竖直朝上压上，拧好中心螺丝，按一下翘板。");
   servoWrite(1, usAt(ASM_DEG[1]));
   servoWrite(0, usAt(ASM_DEG[0]));
+  savePos();                                      // 装配角记下来；这一步零件还没装，直接打过去
   delay(1500);
   for (int i = 0; i < 5; i++) px[2][i][1] = 12;   // 底座开头 5 颗暗绿：等你装
   ledShow(); ledsBlack = false;
@@ -294,11 +335,61 @@ void assemble() {
   delay(300);
   // 回中位（右眼先动），两只不出力，亮灯 = 装完了。在中位装长刃、摇杆（P、Q 螺丝在中位穿得进，结构核对过）。
   // 之后按“立起”对待：第一次放上鼠标就从中位收拢，从此正常使用
-  if (!moveTwo(US_CENTER, US_CENTER, 1)) return;
+  if (!moveTwo(US_CENTER, US_CENTER, 1)) return;  // 急停：回到 loop，由 recover() 接着走到中位
   assembled = true;
   poseOpen = true;
   introNext = true;
   savePrefs();
+}
+
+// ================= 动作没走完之后 =================
+// 等一次“新按下”：BOOT 从松到按；或翘板短按一下（按下又松开，不超过 CLICK_MAX_MS）。鼠标一直压着翘板不算。
+void waitFreshPress() {
+  bool bSeenUp = false;
+  bool kWasDown = digitalRead(PIN_KEY) == LOW, kArmed = false;
+  uint32_t bDown = 0, kDownT = 0;
+  while (true) {
+    digitalWrite(PIN_BLED, (millis() / 1000) % 2 ? LOW : HIGH);   // 小蓝灯慢闪
+    bool b = digitalRead(PIN_BOOT) == LOW, k = digitalRead(PIN_KEY) == LOW;
+    if (!b) { bSeenUp = true; bDown = 0; }
+    else if (bSeenUp) {
+      if (bDown == 0) bDown = millis();
+      else if (millis() - bDown >= 50) break;                     // BOOT 按稳 50 ms
+    }
+    if (k && !kWasDown) { kDownT = millis(); kArmed = true; }      // 翘板新按下
+    if (!k && kWasDown && kArmed) {
+      uint32_t held = millis() - kDownT;
+      kArmed = false;
+      if (held >= DEBOUNCE_MS && held <= CLICK_MAX_MS) break;     // 短按一下
+    }
+    kWasDown = k;
+    delay(5);
+  }
+  while (digitalRead(PIN_BOOT) == LOW) delay(5);                  // BOOT 松手再动（动的时候按 BOOT = 急停）
+  digitalWrite(PIN_BLED, HIGH);
+  delay(300);
+}
+// 上一次动作没走完（急停，或者半路断电后重新上电）：不自己动，等人检查完按一下，
+// 再从记下的位置用一半速度退回上一次走完的姿态（零件还没装完的话 = 走到中位）。
+void recover() {
+  ledBlack();
+  servoOff(0); servoOff(1);
+  while (true) {
+    Serial.println("上次动作没走完。检查机构，没有东西挡着再按一下 BOOT（或短按翘板）。");
+    waitFreshPress();
+    estop = false;
+    bool ok;
+    if (!assembled) ok = moveTwo(US_CENTER, US_CENTER, 1, RECOVER_SLOW);
+    else if (poseOpen) ok = moveTwo(standUs(0), standUs(1), 1, RECOVER_SLOW);
+    else ok = moveTwo(foldUs(0), foldUs(1), 0, RECOVER_SLOW);
+    if (ok) break;
+  }
+  if (!assembled) { assembled = true; poseOpen = true; }
+  if (poseOpen) introNext = true;
+  savePrefs();
+  keyDown = kLastRaw = digitalRead(PIN_KEY) == LOW;
+  clicks = 0;
+  kChange = kRawChange = lastRelease = tMoveEnd = millis();
 }
 
 // 插着电脑：不动舵机、不亮灯带，等串口发 g
@@ -313,7 +404,7 @@ void usbGate() {
     digitalWrite(PIN_BLED, (m < 60 || (m >= 180 && m < 240)) ? LOW : HIGH);
     if (tSay == 0 || millis() - tSay > 10000) {
       tSay = millis();
-      Serial.printf("停机坪 09 发布版  编译于 " __DATE__ " " __TIME__ "。%s。现在插着电脑，不动舵机；拔下来插充电头就开始。\n",
+      Serial.printf("停机坪 10 发布版  编译于 " __DATE__ " " __TIME__ "。%s。现在插着电脑，不动舵机；拔下来插充电头就开始。\n",
                     assembled ? "已装好" : "还没装曲柄和右眼");
     }
     while (Serial.available()) if (Serial.read() == 'g') { digitalWrite(PIN_BLED, HIGH); return; }
@@ -336,11 +427,13 @@ void setup() {
 
   usbGate();
 
-  if (!assembled) assemble();
+  if (midMove && posKnown) estop = true;          // 上次动作没走完：loop 里进 recover()，等人按一下再动
+  else if (!assembled) assemble();
   else {
-    // 按上次停的姿态认当前位置：位置没被掰过的话第一次动作不会跳
-    curUs[0] = poseOpen ? standUs(0) : foldUs(0);
-    curUs[1] = poseOpen ? standUs(1) : foldUs(1);
+    if (!posKnown) {                              // 09 升上来的第一次：没存过位置，只能按上次走完的姿态认
+      curUs[0] = poseOpen ? standUs(0) : foldUs(0);
+      curUs[1] = poseOpen ? standUs(1) : foldUs(1);
+    }
     if (poseOpen) introNext = true;
   }
   keyDown = kLastRaw = digitalRead(PIN_KEY) == LOW;
@@ -348,14 +441,14 @@ void setup() {
 }
 
 void loop() {
-  if (estop) { digitalWrite(PIN_BLED, (millis() / 1000) % 2 ? LOW : HIGH); delay(20); return; }   // 急停后慢闪，等重新插电
+  if (estop) { recover(); return; }               // 急停 / 上次没走完：慢闪，等按一下，慢慢退回去
 
   // BOOT 按住 5 秒：清“已装好”，两只不出力，小灯快闪，等拆零件后重新插电
   static uint32_t bootT0 = 0;
   if (digitalRead(PIN_BOOT) == HIGH) bootT0 = 0;
   else if (bootT0 == 0) bootT0 = millis();
   else if (millis() - bootT0 >= REDO_HOLD_MS) {
-    assembled = false; poseOpen = false; savePrefs();
+    assembled = false; poseOpen = false; savePrefs();   // 同时清掉“没走完”
     ledBlack(); servoOff(0); servoOff(1);
     Serial.println("已清掉“已装好”。拆下曲柄和右眼，重新插电。");
     while (true) { digitalWrite(PIN_BLED, (millis() / 100) % 2 ? LOW : HIGH); delay(20); }
